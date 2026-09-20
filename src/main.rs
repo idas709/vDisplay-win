@@ -402,7 +402,8 @@ fn main() -> Result<()> {
         .unwrap_or_else(|_| "info,virtual_display_workspace=debug,wgpu_core=warn,wgpu_hal=warn".into());
     match diagnostics::log_writer() {
         Ok((writer, path)) => {
-            tracing_subscriber::fmt().with_ansi(false).with_env_filter(filter).with_writer(move || writer.clone()).init();
+            tracing_subscriber::fmt().with_ansi(false).with_env_filter(filter)
+                .with_writer(move || diagnostics::DiagnosticWriter::new(writer.clone())).init();
             tracing::info!(version = env!("CARGO_PKG_VERSION"), log_path = %path.display(), "application starting");
         }
         Err(error) => {

@@ -45,7 +45,9 @@ after placing the signed Parsec package under `driver/parsec-vdd`.
 
 The installed application always appends diagnostics to
 `%LOCALAPPDATA%\VirtualDisplayWorkspace\virtual-display-workspace.log`. The log
-is available even though the release executable has no console window. The
+is available even though the release executable has no console window. When
+started from PowerShell with standard-error redirection, the same diagnostics
+are also written to the redirected output. The
 settings window's Refresh button also retries the VDD connection when startup
 could not connect to the driver.
 
