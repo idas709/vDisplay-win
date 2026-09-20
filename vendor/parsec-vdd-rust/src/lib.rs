@@ -76,6 +76,10 @@ pub enum DeviceStatus {
     NotInstalled,    // Driver is not installed
 }
 
+fn hardware_id_matches(actual: &str, expected: &str) -> bool {
+    actual.eq_ignore_ascii_case(expected)
+}
+
 impl From<i32> for DeviceStatus {
     fn from(value: i32) -> Self {
         match value {
@@ -181,7 +185,7 @@ pub fn query_device_status(class_guid: &GUID, device_id: &str) -> DeviceStatus {
 
                         let current_str =
                             unsafe { CStr::from_ptr(cp as *const i8).to_string_lossy() };
-                        if current_str == device_id {
+                        if hardware_id_matches(&current_str, device_id) {
                             found = true;
                             break;
                         }
@@ -954,5 +958,9 @@ mod regression_tests {
     fn parses_windows_monitor_uid_case_insensitively() {
         assert_eq!(parse_display_address(r"DISPLAY\PSCCDD0\1&28a6823a&1&UID256"), 256);
         assert_eq!(parse_display_address(r"display\psccdd0\1&28a6823a&1&uid257"), 257);
+    }
+    #[test]
+    fn matches_windows_hardware_id_case_insensitively() {
+        assert!(hardware_id_matches("ROOT\\PARSEC\\VDA", "Root\\Parsec\\VDA"));
     }
 }

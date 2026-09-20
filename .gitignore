@@ -1,5 +1,7 @@
 # Rust build output
 /target/
+**/target/
+/vendor/parsec-vdd-rust/Cargo.lock
 
 # Bundled third-party installer/tools (download separately for packaging)
 /driver/parsec-vdd/*.exe

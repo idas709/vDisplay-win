@@ -1,5 +1,5 @@
 #define MyAppName "Virtual Display Workspace"
-#define MyAppVersion "0.1.2"
+#define MyAppVersion "0.1.3"
 #define MyAppExeName "virtual-display-workspace.exe"
 
 [Setup]
