@@ -69,11 +69,17 @@ impl DriverSession {
     }
 
     pub fn start() -> Result<Self> {
-        match query_device_status(&VDD_CLASS_GUID, VDD_HARDWARE_ID) {
-            DeviceStatus::Ok => {}
-            status => return Err(anyhow!("Parsec VDD is not ready: {status:?}")),
+        let reported_status = query_device_status(&VDD_CLASS_GUID, VDD_HARDWARE_ID);
+        if reported_status != DeviceStatus::Ok {
+            // SetupAPI hardware-ID discovery varies between Parsec package and
+            // Windows versions. The device interface is the authoritative test:
+            // continue and try opening it instead of rejecting a usable driver.
+            tracing::warn!(status = ?reported_status,
+                "Parsec VDD status probe was not ready; attempting the device interface directly");
         }
-        let handle = open_device_handle(&VDD_ADAPTER_GUID).context("failed to open Parsec VDD adapter")?;
+        let handle = open_device_handle(&VDD_ADAPTER_GUID).ok_or_else(||
+            anyhow!("failed to open Parsec VDD adapter (status probe: {reported_status:?})"))?;
+        tracing::info!(status = ?reported_status, "Parsec VDD device interface opened");
         let stopping = Arc::new(AtomicBool::new(false));
         let heartbeat_stop = Arc::clone(&stopping);
         let heartbeat_handle = handle.0 as isize;

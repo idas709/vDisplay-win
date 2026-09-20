@@ -1,6 +1,6 @@
 [package]
 name = "virtual-display-workspace"
-version = "0.1.3"
+version = "0.1.4"
 authors = ["idas709"]
 edition = "2021"
 description = "Low-latency virtual display workspace viewer for Windows"
