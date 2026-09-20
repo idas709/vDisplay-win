@@ -1,0 +1,12 @@
+// Reference callback contract only. Runtime caption controls use src/ui.rs
+// and ui/caption.wgsl in the wgpu render pass.
+export component Overlay {
+    in property <bool> settings-open;
+    in property <float> overlay-opacity: 1.0;
+    // Opens or focuses the separate modeless settings window in src/settings.rs.
+    callback settings-clicked();
+    callback fullscreen-clicked();
+    callback minimize-clicked();
+    callback maximize-clicked();
+    callback close-clicked();
+}

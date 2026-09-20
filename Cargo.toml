@@ -1,0 +1,51 @@
+[package]
+name = "virtual-display-workspace"
+version = "0.1.1"
+authors = ["idas709"]
+edition = "2021"
+description = "Low-latency virtual display workspace viewer for Windows"
+license = "MIT"
+build = "build.rs"
+
+[dependencies]
+anyhow = "1"
+bytemuck = { version = "1", features = ["derive"] }
+image = { version = "0.25", default-features = false, features = ["png"] }
+pollster = "0.4"
+serde = { version = "1", features = ["derive"] }
+thiserror = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+glam = "0.29"
+parsec-vdd-rust = "0.0.1"
+raw-window-handle = "0.6"
+winit = "0.30"
+wgpu = "22"
+windows = { version = "0.62", features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Direct3D",
+    "Win32_Graphics_Direct3D11",
+    "Win32_Graphics_Dxgi",
+    "Win32_Graphics_Dxgi_Common",
+    "Win32_Graphics_Gdi",
+    "Win32_Security",
+    "Win32_System_Com",
+    "Win32_System_Threading",
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_UI_Shell",
+    "Win32_UI_HiDpi",
+    "Win32_UI_WindowsAndMessaging",
+] }
+
+[build-dependencies]
+ico = "0.4"
+image = { version = "0.25", default-features = false, features = ["png", "ico"] }
+winresource = "0.1"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+
+
+[patch.crates-io]
+parsec-vdd-rust = { path = "vendor/parsec-vdd-rust" }
