@@ -36,29 +36,33 @@ fn square_outline(p: vec2<f32>, size: f32, aa: f32) -> f32 {
         return vec4(0.,0.,0.,0.24 * (1.-smoothstep(0.,7.,max(shadow_distance,0.))) * overlay.screen.w);
     }
     let drag_width = min(128.,overlay.panel.z * 0.5);
-    let button_width = (overlay.panel.z-drag_width) / 5.;
+    let button_width = (overlay.panel.z-drag_width) / 6.;
     let in_button_area = p.x >= drag_width;
-    let index = clamp(floor((p.x-drag_width) / button_width),0.,4.);
+    let index = clamp(floor((p.x-drag_width) / button_width),0.,5.);
     var color = vec3(0.018,0.020,0.025);
     if in_button_area && index == overlay.state.x {
-        color = select(vec3(0.065),vec3(0.807,0.006,0.017),index == 4.);
+        color = select(vec3(0.065),vec3(0.807,0.006,0.017),index == 5.);
         if index == overlay.state.y { color *= 0.72; }
     }
     let q = p - vec2(drag_width+(index+0.5)*button_width,16.);
     var icon = 0.;
     if index == 0. {
+        let bar_h = (1. - smoothstep(0.45, 0.45 + aa, abs(q.y))) * (1. - smoothstep(5., 5. + aa, abs(q.x)));
+        let bar_v = (1. - smoothstep(0.45, 0.45 + aa, abs(q.x))) * (1. - smoothstep(5., 5. + aa, abs(q.y)));
+        icon = max(bar_h, bar_v);
+    } else if index == 1. {
         let radius = length(q);
         let angle = atan2(q.y,q.x);
         let outer = 5.4 + 1.6 * clamp((cos(angle*8.)-0.1)*2.,0.,1.);
         icon = smoothstep(2.1,2.1+aa,radius) * (1.-smoothstep(outer-aa,outer,radius));
-    } else if index == 1. {
+    } else if index == 2. {
         let a = abs(q);
         let corner = select(6.,2.5,overlay.state.w > 0.5);
         let line = min(abs(a.x-corner),abs(a.y-corner));
         icon = (1.-smoothstep(0.45,0.45+aa,line)) * smoothstep(2.,2.+aa,min(a.x,a.y)) * (1.-smoothstep(6.,6.+aa,max(a.x,a.y)));
-    } else if index == 2. {
-        icon = (1.-smoothstep(0.45,0.45+aa,abs(q.y))) * (1.-smoothstep(5.,5.+aa,abs(q.x)));
     } else if index == 3. {
+        icon = (1.-smoothstep(0.45,0.45+aa,abs(q.y))) * (1.-smoothstep(5.,5.+aa,abs(q.x)));
+    } else if index == 4. {
         if overlay.state.z > 0.5 {
             let front = q-vec2(-1.5,1.5);
             let back = q-vec2(1.5,-1.5);

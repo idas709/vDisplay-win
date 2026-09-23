@@ -9,9 +9,9 @@ use winit::event::{ElementState, MouseButton};
 use winit::window::Window;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum OverlayAction { MoveWindow, Settings, Fullscreen, Minimize, MaximizeRestore, Close }
+pub enum OverlayAction { MoveWindow, NewWindow, Settings, Fullscreen, Minimize, MaximizeRestore, Close }
 
-const ACTIONS: [OverlayAction; 5] = [OverlayAction::Settings, OverlayAction::Fullscreen, OverlayAction::Minimize, OverlayAction::MaximizeRestore, OverlayAction::Close];
+const ACTIONS: [OverlayAction; 6] = [OverlayAction::NewWindow, OverlayAction::Settings, OverlayAction::Fullscreen, OverlayAction::Minimize, OverlayAction::MaximizeRestore, OverlayAction::Close];
 const BUTTON_WIDTH: f64 = 46.0;
 const BUTTON_HEIGHT: f64 = 32.0;
 const DRAG_WIDTH: f64 = 128.0;
@@ -206,11 +206,11 @@ mod tests {
         assert_eq!(state.mouse_input(ElementState::Released,MouseButton::Left),(true,Some(OverlayAction::Close)));
     }
     #[test]
-    fn all_five_buttons_follow_dpi_and_resize_band_is_not_clickable() {
+    fn all_six_buttons_follow_dpi_and_resize_band_is_not_clickable() {
         for scale in [1.,1.5,2.] {
             let mut state=OverlayState::new();
             let now=state.last_tick+Duration::from_secs(1);
-            for (x,action) in [(593.,OverlayAction::Settings),(639.,OverlayAction::Fullscreen),(685.,OverlayAction::Minimize),(731.,OverlayAction::MaximizeRestore),(777.,OverlayAction::Close)] {
+            for (x,action) in [(547.,OverlayAction::NewWindow),(593.,OverlayAction::Settings),(639.,OverlayAction::Fullscreen),(685.,OverlayAction::Minimize),(731.,OverlayAction::MaximizeRestore),(777.,OverlayAction::Close)] {
                 update(&mut state,now,Some((x*scale,25.*scale)),scale);
                 assert_eq!(state.hovered,Some(action));
             }
