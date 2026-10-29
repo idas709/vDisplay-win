@@ -177,9 +177,6 @@ impl DesktopDuplicator {
                 if self.timeouts == 1 || self.timeouts.is_multiple_of(120) {
                     tracing::debug!(hresult = "0x887A0027", timeouts = self.timeouts, elapsed_ms = self.last_frame.elapsed().as_millis() as u64, "AcquireNextFrame: DXGI_ERROR_WAIT_TIMEOUT");
                 }
-                if self.last_frame.elapsed() >= Duration::from_secs(5) {
-                    return Err(dxgi_failure("AcquireNextFrame: continuous timeout watchdog (static desktop is also possible)", error));
-                }
                 return Ok(None);
             }
             return Err(dxgi_failure("AcquireNextFrame", error));

@@ -2,7 +2,8 @@
 use anyhow::{bail, Result};
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use std::sync::{atomic::{AtomicBool, AtomicU64, Ordering}, Arc};
-use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, RECT, WPARAM};
+use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
+use windows::Win32::Graphics::Gdi::{GetMonitorInfoW, MonitorFromWindow, MONITORINFO, MONITOR_DEFAULTTONEAREST};
 use windows::Win32::UI::HiDpi::GetDpiForWindow;
 use windows::Win32::UI::Shell::{DefSubclassProc, RemoveWindowSubclass, SetWindowSubclass};
 use windows::Win32::UI::WindowsAndMessaging::*;
@@ -81,6 +82,17 @@ fn fit_size(bounds: PhysicalSize<u32>, ratio: f64, min_height: f64) -> PhysicalS
     PhysicalSize::new((height * ratio).round() as u32, height.round() as u32)
 }
 
+pub(crate) fn maximized_geometry(work: RECT, ratio: f64) -> (POINT, POINT) {
+    let work_w = (work.right - work.left).max(1) as u32;
+    let work_h = (work.bottom - work.top).max(1) as u32;
+    let size = fit_size(PhysicalSize::new(work_w, work_h), ratio, 1.0);
+    let max_w = size.width as i32;
+    let max_h = size.height as i32;
+    let max_x = work.left + ((work.right - work.left) - max_w) / 2;
+    let max_y = work.top + ((work.bottom - work.top) - max_h) / 2;
+    (POINT { x: max_w, y: max_h }, POINT { x: max_x, y: max_y })
+}
+
 fn edge_at(rect: RECT, x: i32, y: i32, border: i32) -> Option<u32> {
     if x < rect.left || x >= rect.right || y < rect.top || y >= rect.bottom { return None; }
     let left = x < rect.left + border;
@@ -151,6 +163,30 @@ unsafe extern "system" fn window_proc(hwnd: HWND, message: u32, wparam: WPARAM, 
         constrain(&mut *(lparam.0 as *mut RECT), wparam.0 as u32, ratio, minimum_height(ratio, scale), chrome);
         return LRESULT(1);
     }
+    if message == WM_GETMINMAXINFO && lparam.0 != 0 {
+        if (&*(data as *const ResizeState)).fullscreen.load(Ordering::Relaxed) {
+            return DefSubclassProc(hwnd, message, wparam, lparam);
+        }
+        let _ = DefSubclassProc(hwnd, message, wparam, lparam);
+        let minmax = &mut *(lparam.0 as *mut MINMAXINFO);
+
+        let hmonitor = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
+        let mut monitor_info = MONITORINFO {
+            cbSize: std::mem::size_of::<MONITORINFO>() as u32,
+            ..Default::default()
+        };
+        if GetMonitorInfoW(hmonitor, &mut monitor_info).as_bool() {
+            let dimensions = (&*(data as *const ResizeState)).dimensions.load(Ordering::Relaxed);
+            let ratio = f64::from((dimensions >> 32) as u32) / f64::from(dimensions as u32);
+            let (max_size, max_pos) = maximized_geometry(monitor_info.rcWork, ratio);
+
+            minmax.ptMaxSize = max_size;
+            minmax.ptMaxPosition = max_pos;
+            minmax.ptMaxTrackSize.x = minmax.ptMaxTrackSize.x.max(max_size.x);
+            minmax.ptMaxTrackSize.y = minmax.ptMaxTrackSize.y.max(max_size.y);
+        }
+        return LRESULT(0);
+    }
     DefSubclassProc(hwnd, message, wparam, lparam)
 }
 
@@ -192,5 +228,20 @@ mod tests {
     fn initial_landscape_and_portrait_sizes_fit_available_area() {
         assert_eq!(fit_size(PhysicalSize::new(1000,800),16.0/9.0,180.0),PhysicalSize::new(1000,563));
         assert_eq!(fit_size(PhysicalSize::new(1000,800),9.0/16.0,320.0),PhysicalSize::new(450,800));
+    }
+    #[test]
+    fn maximized_geometry_fits_width_or_height_without_letterbox() {
+        // Surface Laptop (3:2 = 2880x1920) with 16:9 content -> fits width (2880x1620), centered vertically (y=150)
+        let work = RECT { left: 0, top: 0, right: 2880, bottom: 1920 };
+        let ratio = 16.0 / 9.0;
+        let (size, pos) = maximized_geometry(work, ratio);
+        assert_eq!((size.x, size.y), (2880, 1620));
+        assert_eq!((pos.x, pos.y), (0, 150));
+
+        // Ultrawide (21:9 = 3440x1440) with 16:9 content -> fits height (2560x1440), centered horizontally
+        let work_uw = RECT { left: 100, top: 50, right: 3540, bottom: 1490 };
+        let (size_uw, pos_uw) = maximized_geometry(work_uw, ratio);
+        assert_eq!((size_uw.x, size_uw.y), (2560, 1440));
+        assert_eq!((pos_uw.x, pos_uw.y), (100 + (3440 - 2560) / 2, 50));
     }
 }

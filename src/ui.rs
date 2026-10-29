@@ -97,6 +97,10 @@ impl OverlayState {
     }
 
     pub fn cancel_press(&mut self) { self.pressed = None; }
+
+    pub fn is_animating(&self) -> bool {
+        self.opacity > 0.0 || self.last_hover.is_some() || self.pressed.is_some()
+    }
 }
 
 /// Polling also sees hover over the native resize band (non-client mouse moves)

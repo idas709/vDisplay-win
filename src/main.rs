@@ -64,6 +64,10 @@ impl ViewerWindow {
         let y = bounds.top.saturating_add(position.y.round() as i32);
         unsafe { let _ = SetCursorPos(x, y); }
     }
+
+    fn needs_ui_render(&self) -> bool {
+        self.dragging || self.overlay.is_animating() || self.zoom_ui.is_animating()
+    }
 }
 
 struct App {
@@ -421,7 +425,9 @@ impl App {
             Err(wgpu::SurfaceError::OutOfMemory) => std::process::exit(1),
             Err(wgpu::SurfaceError::Timeout) => {}
         }
-        viewer.window.request_redraw();
+        if viewer.needs_ui_render() {
+            viewer.window.request_redraw();
+        }
     }
 
     fn render_all(&mut self) {
@@ -435,18 +441,25 @@ impl App {
         if self.update_capture() {
             self.render_all();
         } else {
-            self.render_window(window_id);
+            let needs_render = self.viewers.iter().find(|v| v.window.id() == window_id)
+                .is_some_and(|v| v.needs_ui_render());
+            if needs_render {
+                self.render_window(window_id);
+            }
         }
     }
 }
 
 impl ApplicationHandler for App {
     fn user_event(&mut self, _event_loop: &ActiveEventLoop, (): ()) { self.process_settings(); }
-    fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
+    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
         self.process_settings();
         if self.update_capture() {
             self.render_all();
         }
+        event_loop.set_control_flow(winit::event_loop::ControlFlow::WaitUntil(
+            std::time::Instant::now() + std::time::Duration::from_millis(8)
+        ));
     }
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         if !self.initialized {
@@ -480,13 +493,17 @@ impl ApplicationHandler for App {
                 if let Some(viewer) = self.viewers.iter_mut().find(|v| v.window.id() == window_id) {
                     viewer.renderer.resize(size.width, size.height);
                     viewer.viewport.resize(Vec2::new(size.width as f32, size.height as f32));
+                    viewer.window.request_redraw();
                 }
             }
-            WindowEvent::Focused(false) => {
+            WindowEvent::Focused(focused) => {
                 if let Some(viewer) = self.viewers.iter_mut().find(|v| v.window.id() == window_id) {
-                    viewer.overlay.cancel_press();
-                    viewer.zoom_ui.cancel();
-                    viewer.dragging = false;
+                    if !focused {
+                        viewer.overlay.cancel_press();
+                        viewer.zoom_ui.cancel();
+                        viewer.dragging = false;
+                    }
+                    viewer.window.request_redraw();
                 }
             }
             WindowEvent::ModifiersChanged(modifiers) => {
@@ -499,7 +516,7 @@ impl ApplicationHandler for App {
                     return;
                 }
                 if let Some(viewer) = self.viewers.iter_mut().find(|v| v.window.id() == window_id) {
-                    if pressed && code == KeyCode::Escape && viewer.zoom_ui.escape() { return; }
+                    if pressed && code == KeyCode::Escape && viewer.zoom_ui.escape() { viewer.window.request_redraw(); return; }
                     if pressed && !repeat && (code == KeyCode::F11 || (code == KeyCode::Escape && viewer.window.fullscreen().is_some())) {
                         viewer.toggle_fullscreen();
                     }
@@ -507,6 +524,7 @@ impl ApplicationHandler for App {
                     if pressed && self.modifiers.control_key() && code == KeyCode::Digit0 {
                         viewer.viewport.reset(if self.modifiers.shift_key() { ResetMode::ActualSize } else { ResetMode::Fit });
                     }
+                    viewer.window.request_redraw();
                 }
             }
             WindowEvent::MouseInput { state, button, .. } => {
@@ -516,6 +534,7 @@ impl ApplicationHandler for App {
                 let capture_bounds = self.capture_bounds;
 
                 if let Some(viewer) = self.viewers.iter_mut().find(|v| v.window.id() == window_id) {
+                    viewer.window.request_redraw();
                     viewer.zoom_ui.update(&viewer.window, &mut viewer.viewport);
                     if viewer.zoom_ui.mouse(state, button, &mut viewer.viewport) {
                         viewer.dragging = false;
@@ -559,6 +578,7 @@ impl ApplicationHandler for App {
             WindowEvent::CursorMoved { position, .. } => {
                 let cursor = Vec2::new(position.x as f32, position.y as f32);
                 if let Some(viewer) = self.viewers.iter_mut().find(|v| v.window.id() == window_id) {
+                    viewer.window.request_redraw();
                     if viewer.zoom_ui.cursor_moved(cursor, &mut viewer.viewport) {
                         viewer.last_cursor = cursor;
                         return;
@@ -571,6 +591,7 @@ impl ApplicationHandler for App {
             }
             WindowEvent::MouseWheel { delta, .. } => {
                 if let Some(viewer) = self.viewers.iter_mut().find(|v| v.window.id() == window_id) {
+                    viewer.window.request_redraw();
                     viewer.zoom_ui.update(&viewer.window, &mut viewer.viewport);
                     let amount = match delta {
                         MouseScrollDelta::LineDelta(_, y) => y,

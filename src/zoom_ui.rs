@@ -100,6 +100,9 @@ impl ZoomUi {
     }
     pub fn escape(&mut self) -> bool { let was=self.open || self.dragging; self.cancel(); was }
     pub fn cancel(&mut self) { self.open=false; self.dragging=false; self.pressed=false; }
+    pub fn is_animating(&self) -> bool {
+        self.opacity > 0.0 || self.last_hover.is_some() || self.open || self.dragging || self.pressed
+    }
 }
 
 use windows::{core::w, Win32::{Foundation::{COLORREF, RECT, SIZE}, Graphics::Gdi::*}};

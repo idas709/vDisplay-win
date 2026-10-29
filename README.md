@@ -30,9 +30,9 @@ Display Settings cannot offer an extended display before the viewer starts. On
 startup the viewer adds the display and places it to the right of the primary
 desktop. Desktop Duplication can return `DXGI_ERROR_ACCESS_LOST` when the output
 changes; the viewer releases the old duplication/device and retries enumeration
-and capture creation every 500 ms. A five-second continuous timeout also triggers
-re-enumeration and recreation. A static desktop can legitimately time out, so this
-watchdog is a recovery heuristic, not proof of a driver fault.
+and capture creation every 500 ms. A static desktop legitimately times out
+without producing new frames; the viewer preserves the last rendered frame and
+avoids unnecessary presents to support high-refresh and variable-refresh displays.
 
 The CPU staging path is intentional for this first slice. It is straightforward
 and correct, but a production 60 fps build should replace it with a shared D3D11
