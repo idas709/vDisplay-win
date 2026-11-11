@@ -38,14 +38,19 @@ struct ViewerWindow {
     last_cursor: Vec2,
     space_down: bool,
     fullscreen_restore_size: Option<winit::dpi::PhysicalSize<u32>>,
+    maximized_restore_bounds: Option<(winit::dpi::PhysicalPosition<i32>, winit::dpi::PhysicalSize<u32>)>,
 }
 
 impl ViewerWindow {
+    fn is_maximized(&self) -> bool {
+        self.maximized_restore_bounds.is_some()
+    }
+
     fn toggle_fullscreen(&mut self) {
         let entering = self.window.fullscreen().is_none();
         self.window_sizing.set_fullscreen(entering);
         if entering {
-            self.fullscreen_restore_size = (!self.window.is_maximized()).then(|| self.window.inner_size());
+            self.fullscreen_restore_size = (!self.is_maximized()).then(|| self.window.inner_size());
             self.window.set_fullscreen(Some(Fullscreen::Borderless(self.window.current_monitor())));
         } else {
             self.window.set_fullscreen(None);
@@ -57,16 +62,47 @@ impl ViewerWindow {
         tracing::info!(fullscreen = entering, "viewer fullscreen changed");
     }
 
+    fn toggle_maximize(&mut self) {
+        if self.window.fullscreen().is_some() {
+            self.toggle_fullscreen();
+            return;
+        }
+
+        if let Some((old_pos, old_size)) = self.maximized_restore_bounds.take() {
+            let _ = self.window.request_inner_size(old_size);
+            self.window.set_outer_position(old_pos);
+            self.window.request_redraw();
+            tracing::info!(width = old_size.width, height = old_size.height, "viewer restored from maximize");
+        } else {
+            let current_pos = self.window.outer_position().unwrap_or(winit::dpi::PhysicalPosition::new(100, 100));
+            let current_size = self.window.inner_size();
+            let ratio = self.window_sizing.content_ratio();
+
+            if let Some(work) = window_sizing::get_monitor_work_area(&self.window) {
+                let (max_size, max_pos) = window_sizing::maximized_geometry(work, ratio);
+                self.maximized_restore_bounds = Some((current_pos, current_size));
+                let _ = self.window.request_inner_size(max_size);
+                self.window.set_outer_position(max_pos);
+                self.window.request_redraw();
+                tracing::info!(width = max_size.width, height = max_size.height, x = max_pos.x, y = max_pos.y, "viewer maximized to fit screen");
+            }
+        }
+    }
+
+    fn set_custom_size(&mut self, width: u32, height: u32) {
+        self.maximized_restore_bounds = None;
+        let new_size = winit::dpi::PhysicalSize::new(width.max(100), height.max(100));
+        let _ = self.window.request_inner_size(new_size);
+        self.window.request_redraw();
+        tracing::info!(width = new_size.width, height = new_size.height, "viewer custom size applied");
+    }
+
     fn move_cursor_to_display(&self, cursor: Vec2, bounds: Option<windows::Win32::Foundation::RECT>) {
         let Some(bounds) = bounds else { return };
         let position = self.viewport.content_position_at(cursor);
         let x = bounds.left.saturating_add(position.x.round() as i32);
         let y = bounds.top.saturating_add(position.y.round() as i32);
         unsafe { let _ = SetCursorPos(x, y); }
-    }
-
-    fn needs_ui_render(&self) -> bool {
-        self.dragging || self.overlay.is_animating() || self.zoom_ui.is_animating()
     }
 }
 
@@ -129,8 +165,12 @@ impl App {
                 }
                 if let Some(display) = selected_display.as_ref() {
                     content_size = Vec2::new(display.width.max(1) as f32, display.height.max(1) as f32);
+                    // Give Explorer and DWM a moment to establish composition on the newly attached display
+                    std::thread::sleep(std::time::Duration::from_millis(500));
                     match DesktopDuplicator::new(display) {
-                        Ok(capture) => duplicator = Some(capture),
+                        Ok(capture) => {
+                            duplicator = Some(capture);
+                        }
                         Err(error) => tracing::warn!(error = %format!("{error:#}"), "initial duplication failed; scheduling recovery"),
                     }
                     self.capture_display_name = Some(display.name.clone());
@@ -215,6 +255,7 @@ impl App {
             last_cursor: Vec2::ZERO,
             space_down: false,
             fullscreen_restore_size: None,
+            maximized_restore_bounds: None,
         });
 
         self.render_window(window_id);
@@ -241,7 +282,7 @@ impl App {
             match duplicator.next_frame(std::time::Duration::from_millis(1)) {
                 Ok(Some(frame)) => {
                     if frame.frame_id == 1 {
-                        tracing::debug!(width = frame.width, height = frame.height, "uploading first frame to renderers");
+                        tracing::info!(width = frame.width, height = frame.height, "uploading first frame to renderers");
                     }
                     let frame = std::sync::Arc::new(frame);
                     self.last_frame = Some(std::sync::Arc::clone(&frame));
@@ -291,13 +332,14 @@ impl App {
         match DesktopDuplicator::new(selected_display) {
             Ok(duplicator) => {
                 tracing::info!(display_name = %selected_display.name, "desktop duplication recreated");
-                self.duplicator = Some(duplicator);
                 self.content_size = Vec2::new(selected_display.width.max(1) as f32, selected_display.height.max(1) as f32);
                 for viewer in &mut self.viewers {
                     viewer.window_sizing.set_content_size(&viewer.window, selected_display.width, selected_display.height, false);
                     viewer.viewport.content_size = self.content_size;
                     viewer.viewport.resize(viewer.viewport.viewport_size);
                 }
+                self.duplicator = Some(duplicator);
+                self.render_all();
             }
             Err(error) => tracing::warn!(error = %format!("{error:#}"), "failed to recreate desktop duplication"),
         }
@@ -328,7 +370,8 @@ impl App {
             match action {
                 settings::Action::Close => { self.settings = None; }
                 settings::Action::Refresh => self.refresh_settings(),
-                settings::Action::Accept { language, resolution, view } => {
+                settings::Action::Accept { language, resolution, view, window_size } => {
+                    let target_id = self.settings.as_ref().map(|s| s.target_window_id);
                     if let Some(mode) = resolution {
                         drop(self.duplicator.take());
                         let result = self.driver_session.as_mut().ok_or_else(|| anyhow::anyhow!("仮想ディスプレイが切断されました。"))
@@ -339,6 +382,13 @@ impl App {
                             tracing::warn!(%error, "virtual resolution change failed");
                             if let Some(settings) = &self.settings { settings.set_status(&error.to_string()); }
                             continue;
+                        }
+                    }
+                    if let Some((w, h)) = window_size {
+                        if let Some(target_id) = target_id {
+                            if let Some(viewer) = self.viewers.iter_mut().find(|v| v.window.id() == target_id) {
+                                viewer.set_custom_size(w, h);
+                            }
                         }
                     }
                     if let Some(mode) = view {
@@ -372,14 +422,25 @@ impl App {
                 }
             }
             OverlayAction::Settings => {
-                let owner = self.viewers.iter().find(|v| v.window.id() == window_id)
-                    .map(|v| &v.window)
-                    .or_else(|| self.viewers.first().map(|v| &v.window));
-                let Some(owner) = owner else { return };
+                let target_viewer = self.viewers.iter().find(|v| v.window.id() == window_id)
+                    .or_else(|| self.viewers.first());
+                let Some(target) = target_viewer else { return };
+                let target_id = target.window.id();
+                let target_size = target.window.inner_size();
+                let content_ratio = target.window_sizing.content_ratio();
                 if self.settings.is_none() {
-                    match settings::SettingsWindow::new(event_loop, owner, std::sync::Arc::clone(&self.settings_hwnd), self.settings_proxy.as_ref().unwrap().clone(), self.language) {
+                    match settings::SettingsWindow::new(
+                        event_loop,
+                        &target.window,
+                        target_id,
+                        target_size,
+                        content_ratio,
+                        std::sync::Arc::clone(&self.settings_hwnd),
+                        self.settings_proxy.as_ref().unwrap().clone(),
+                        self.language,
+                    ) {
                         Ok(settings) => { self.settings = Some(settings); self.refresh_settings(); },
-                        Err(error) => { ui::show_error(owner, &error.to_string(), self.language); return; }
+                        Err(error) => { ui::show_error(&target.window, &error.to_string(), self.language); return; }
                     }
                 }
                 if let Some(settings) = &self.settings { settings.show(); }
@@ -396,11 +457,7 @@ impl App {
             }
             OverlayAction::MaximizeRestore => {
                 if let Some(viewer) = self.viewers.iter_mut().find(|v| v.window.id() == window_id) {
-                    if viewer.window.fullscreen().is_some() {
-                        viewer.toggle_fullscreen();
-                    } else {
-                        viewer.window.set_maximized(!viewer.window.is_maximized());
-                    }
+                    viewer.toggle_maximize();
                 }
             }
             OverlayAction::Close => {
@@ -415,7 +472,7 @@ impl App {
         let window_size = viewer.window.inner_size();
         viewer.zoom_ui.language = language;
         viewer.zoom_ui.update(&viewer.window, &mut viewer.viewport);
-        let overlay_visual = viewer.overlay.update(&viewer.window);
+        let overlay_visual = viewer.overlay.update(&viewer.window, viewer.is_maximized());
         viewer.renderer.update_viewport(&viewer.viewport);
         match viewer.renderer.render(&overlay_visual, &viewer.zoom_ui, &viewer.viewport) {
             Ok(()) => {}
@@ -425,9 +482,7 @@ impl App {
             Err(wgpu::SurfaceError::OutOfMemory) => std::process::exit(1),
             Err(wgpu::SurfaceError::Timeout) => {}
         }
-        if viewer.needs_ui_render() {
-            viewer.window.request_redraw();
-        }
+        viewer.window.request_redraw();
     }
 
     fn render_all(&mut self) {
@@ -441,25 +496,18 @@ impl App {
         if self.update_capture() {
             self.render_all();
         } else {
-            let needs_render = self.viewers.iter().find(|v| v.window.id() == window_id)
-                .is_some_and(|v| v.needs_ui_render());
-            if needs_render {
-                self.render_window(window_id);
-            }
+            self.render_window(window_id);
         }
     }
 }
 
 impl ApplicationHandler for App {
     fn user_event(&mut self, _event_loop: &ActiveEventLoop, (): ()) { self.process_settings(); }
-    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+    fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
         self.process_settings();
         if self.update_capture() {
             self.render_all();
         }
-        event_loop.set_control_flow(winit::event_loop::ControlFlow::WaitUntil(
-            std::time::Instant::now() + std::time::Duration::from_millis(8)
-        ));
     }
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         if !self.initialized {
@@ -540,7 +588,7 @@ impl ApplicationHandler for App {
                         viewer.dragging = false;
                         return;
                     }
-                    viewer.overlay.update(&viewer.window);
+                    viewer.overlay.update(&viewer.window, viewer.is_maximized());
                     let (consumed, action) = viewer.overlay.mouse_input(state, button);
                     if consumed {
                         viewer.dragging = false;
@@ -562,7 +610,8 @@ impl ApplicationHandler for App {
                 }
 
                 if drag_window {
-                    if let Some(viewer) = self.viewers.iter().find(|v| v.window.id() == window_id) {
+                    if let Some(viewer) = self.viewers.iter_mut().find(|v| v.window.id() == window_id) {
+                        viewer.maximized_restore_bounds = None;
                         let _ = viewer.window.drag_window();
                     }
                 }

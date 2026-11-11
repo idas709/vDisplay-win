@@ -2,7 +2,7 @@
 use anyhow::{bail, Result};
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use std::sync::{atomic::{AtomicBool, AtomicU64, Ordering}, Arc};
-use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
+use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, RECT, WPARAM};
 use windows::Win32::Graphics::Gdi::{GetMonitorInfoW, MonitorFromWindow, MONITORINFO, MONITOR_DEFAULTTONEAREST};
 use windows::Win32::UI::HiDpi::GetDpiForWindow;
 use windows::Win32::UI::Shell::{DefSubclassProc, RemoveWindowSubclass, SetWindowSubclass};
@@ -21,6 +21,11 @@ impl WindowSizing {
     }
 
     pub fn set_fullscreen(&self, fullscreen: bool) { self.state.fullscreen.store(fullscreen, Ordering::Relaxed); }
+
+    pub fn content_ratio(&self) -> f64 {
+        let dimensions = self.state.dimensions.load(Ordering::Relaxed);
+        f64::from((dimensions >> 32) as u32) / f64::from(dimensions as u32)
+    }
 
     pub fn restore_size(&self, window: &Window, bounds: PhysicalSize<u32>) {
         let dimensions = self.state.dimensions.load(Ordering::Relaxed);
@@ -77,12 +82,29 @@ impl WindowSizing {
 fn pack(width: u32, height: u32) -> u64 { (u64::from(width) << 32) | u64::from(height) }
 fn minimum_height(ratio: f64, scale: f64) -> f64 { 180.0 * scale / ratio.min(1.0) }
 
-fn fit_size(bounds: PhysicalSize<u32>, ratio: f64, min_height: f64) -> PhysicalSize<u32> {
+pub(crate) fn fit_size(bounds: PhysicalSize<u32>, ratio: f64, min_height: f64) -> PhysicalSize<u32> {
     let height = f64::from(bounds.height).min(f64::from(bounds.width) / ratio).max(min_height);
     PhysicalSize::new((height * ratio).round() as u32, height.round() as u32)
 }
 
-pub(crate) fn maximized_geometry(work: RECT, ratio: f64) -> (POINT, POINT) {
+pub fn get_monitor_work_area(window: &Window) -> Option<RECT> {
+    let RawWindowHandle::Win32(handle) = window.window_handle().ok()?.as_raw() else { return None; };
+    let hwnd = HWND(handle.hwnd.get() as _);
+    unsafe {
+        let hmonitor = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
+        let mut monitor_info = MONITORINFO {
+            cbSize: std::mem::size_of::<MONITORINFO>() as u32,
+            ..Default::default()
+        };
+        if GetMonitorInfoW(hmonitor, &mut monitor_info).as_bool() {
+            Some(monitor_info.rcWork)
+        } else {
+            None
+        }
+    }
+}
+
+pub fn maximized_geometry(work: RECT, ratio: f64) -> (PhysicalSize<u32>, PhysicalPosition<i32>) {
     let work_w = (work.right - work.left).max(1) as u32;
     let work_h = (work.bottom - work.top).max(1) as u32;
     let size = fit_size(PhysicalSize::new(work_w, work_h), ratio, 1.0);
@@ -90,7 +112,16 @@ pub(crate) fn maximized_geometry(work: RECT, ratio: f64) -> (POINT, POINT) {
     let max_h = size.height as i32;
     let max_x = work.left + ((work.right - work.left) - max_w) / 2;
     let max_y = work.top + ((work.bottom - work.top) - max_h) / 2;
-    (POINT { x: max_w, y: max_h }, POINT { x: max_x, y: max_y })
+    (size, PhysicalPosition::new(max_x, max_y))
+}
+
+pub fn calculate_aspect_height(width: u32, ratio: f64) -> u32 {
+    if ratio <= 0.0 { return width; }
+    (f64::from(width) / ratio).round() as u32
+}
+
+pub fn calculate_aspect_width(height: u32, ratio: f64) -> u32 {
+    (f64::from(height) * ratio).round() as u32
 }
 
 fn edge_at(rect: RECT, x: i32, y: i32, border: i32) -> Option<u32> {
@@ -163,30 +194,6 @@ unsafe extern "system" fn window_proc(hwnd: HWND, message: u32, wparam: WPARAM, 
         constrain(&mut *(lparam.0 as *mut RECT), wparam.0 as u32, ratio, minimum_height(ratio, scale), chrome);
         return LRESULT(1);
     }
-    if message == WM_GETMINMAXINFO && lparam.0 != 0 {
-        if (&*(data as *const ResizeState)).fullscreen.load(Ordering::Relaxed) {
-            return DefSubclassProc(hwnd, message, wparam, lparam);
-        }
-        let _ = DefSubclassProc(hwnd, message, wparam, lparam);
-        let minmax = &mut *(lparam.0 as *mut MINMAXINFO);
-
-        let hmonitor = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
-        let mut monitor_info = MONITORINFO {
-            cbSize: std::mem::size_of::<MONITORINFO>() as u32,
-            ..Default::default()
-        };
-        if GetMonitorInfoW(hmonitor, &mut monitor_info).as_bool() {
-            let dimensions = (&*(data as *const ResizeState)).dimensions.load(Ordering::Relaxed);
-            let ratio = f64::from((dimensions >> 32) as u32) / f64::from(dimensions as u32);
-            let (max_size, max_pos) = maximized_geometry(monitor_info.rcWork, ratio);
-
-            minmax.ptMaxSize = max_size;
-            minmax.ptMaxPosition = max_pos;
-            minmax.ptMaxTrackSize.x = minmax.ptMaxTrackSize.x.max(max_size.x);
-            minmax.ptMaxTrackSize.y = minmax.ptMaxTrackSize.y.max(max_size.y);
-        }
-        return LRESULT(0);
-    }
     DefSubclassProc(hwnd, message, wparam, lparam)
 }
 
@@ -235,13 +242,23 @@ mod tests {
         let work = RECT { left: 0, top: 0, right: 2880, bottom: 1920 };
         let ratio = 16.0 / 9.0;
         let (size, pos) = maximized_geometry(work, ratio);
-        assert_eq!((size.x, size.y), (2880, 1620));
+        assert_eq!((size.width, size.height), (2880, 1620));
         assert_eq!((pos.x, pos.y), (0, 150));
 
         // Ultrawide (21:9 = 3440x1440) with 16:9 content -> fits height (2560x1440), centered horizontally
         let work_uw = RECT { left: 100, top: 50, right: 3540, bottom: 1490 };
         let (size_uw, pos_uw) = maximized_geometry(work_uw, ratio);
-        assert_eq!((size_uw.x, size_uw.y), (2560, 1440));
+        assert_eq!((size_uw.width, size_uw.height), (2560, 1440));
         assert_eq!((pos_uw.x, pos_uw.y), (100 + (3440 - 2560) / 2, 50));
+    }
+    #[test]
+    fn aspect_size_calculations_maintain_ratio() {
+        let ratio = 1920.0 / 1080.0;
+        assert_eq!(calculate_aspect_height(1920, ratio), 1080);
+        assert_eq!(calculate_aspect_width(1080, ratio), 1920);
+        assert_eq!(calculate_aspect_height(1280, ratio), 720);
+        assert_eq!(calculate_aspect_width(720, ratio), 1280);
+        assert_eq!(calculate_aspect_height(2560, ratio), 1440);
+        assert_eq!(calculate_aspect_width(1440, ratio), 2560);
     }
 }

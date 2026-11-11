@@ -1,6 +1,6 @@
 [package]
 name = "virtual-display-workspace"
-version = "0.2.1"
+version = "0.2.2"
 authors = ["idas709"]
 edition = "2021"
 description = "Low-latency virtual display workspace viewer for Windows"
@@ -30,6 +30,8 @@ windows = { version = "0.62", features = [
     "Win32_Graphics_Gdi",
     "Win32_Security",
     "Win32_System_Com",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Power",
     "Win32_System_Threading",
     "Win32_UI_Input_KeyboardAndMouse",
     "Win32_UI_Shell",

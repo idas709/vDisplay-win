@@ -38,9 +38,9 @@ impl OverlayState {
         Self { opacity: 0.0, last_tick: Instant::now(), last_hover: None, hovered: None, pressed: None }
     }
 
-    pub fn update(&mut self, window: &Window) -> OverlayVisual {
+    pub fn update(&mut self, window: &Window, custom_maximized: bool) -> OverlayVisual {
         let fullscreen = window.fullscreen().is_some();
-        let mut visual = self.advance(Instant::now(), cursor_position(window), window.inner_size(), window.scale_factor(), window.is_maximized() || fullscreen);
+        let mut visual = self.advance(Instant::now(), cursor_position(window), window.inner_size(), window.scale_factor(), custom_maximized || window.is_maximized() || fullscreen);
         visual.state[3] = if fullscreen { 1.0 } else { 0.0 };
         visual
     }
@@ -98,6 +98,7 @@ impl OverlayState {
 
     pub fn cancel_press(&mut self) { self.pressed = None; }
 
+    #[allow(dead_code)]
     pub fn is_animating(&self) -> bool {
         self.opacity > 0.0 || self.last_hover.is_some() || self.pressed.is_some()
     }

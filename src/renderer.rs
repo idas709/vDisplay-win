@@ -21,8 +21,9 @@ struct VertexOutput { @builtin(position) position: vec4<f32>, @location(0) uv: v
 @fragment fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     let centered = input.uv - vec2(0.5) - vec2(viewport.pan_x, -viewport.pan_y);
     let uv = centered / vec2(viewport.scale_x, viewport.scale_y) + vec2(0.5);
-  if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) { discard; }
-  return textureSample(frame_texture, frame_sampler, vec2(uv.x, 1.0 - uv.y));
+    if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) { discard; }
+    let color = textureSample(frame_texture, frame_sampler, vec2(uv.x, 1.0 - uv.y));
+    return vec4<f32>(color.rgb, 1.0);
 }
 "#;
 
