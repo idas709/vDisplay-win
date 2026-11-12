@@ -1,25 +1,24 @@
+use crate::pointer::PointerShape;
 use anyhow::{anyhow, Context, Result};
 use std::time::{Duration, Instant};
 use windows::core::Interface;
 use windows::Win32::Foundation::{HMODULE, POINT, RECT};
 use windows::Win32::Graphics::Direct3D::{D3D_DRIVER_TYPE_UNKNOWN, D3D_FEATURE_LEVEL_11_0};
 use windows::Win32::Graphics::Direct3D11::{
-    D3D11CreateDevice, D3D11_CPU_ACCESS_READ, D3D11_CREATE_DEVICE_BGRA_SUPPORT,
-    D3D11_MAP_READ, D3D11_MAPPED_SUBRESOURCE, D3D11_RESOURCE_MISC_FLAG, D3D11_SDK_VERSION,
-    D3D11_TEXTURE2D_DESC, D3D11_USAGE_STAGING, ID3D11Device, ID3D11DeviceContext,
-    ID3D11Texture2D,
+    D3D11CreateDevice, ID3D11Device, ID3D11DeviceContext, ID3D11Texture2D, D3D11_CPU_ACCESS_READ,
+    D3D11_CREATE_DEVICE_BGRA_SUPPORT, D3D11_MAPPED_SUBRESOURCE, D3D11_MAP_READ,
+    D3D11_RESOURCE_MISC_FLAG, D3D11_SDK_VERSION, D3D11_TEXTURE2D_DESC, D3D11_USAGE_STAGING,
 };
 use windows::Win32::Graphics::Dxgi::Common::{DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_SAMPLE_DESC};
 use windows::Win32::Graphics::Dxgi::{
-    CreateDXGIFactory1, IDXGIAdapter1, IDXGIOutput, IDXGIOutput1, IDXGIOutputDuplication,
-    IDXGIFactory1, IDXGIResource, DXGI_ERROR_WAIT_TIMEOUT,
-    DXGI_OUTDUPL_FRAME_INFO, DXGI_OUTDUPL_POINTER_SHAPE_INFO,
+    CreateDXGIFactory1, IDXGIAdapter1, IDXGIFactory1, IDXGIOutput, IDXGIOutput1,
+    IDXGIOutputDuplication, IDXGIResource, DXGI_ERROR_WAIT_TIMEOUT, DXGI_OUTDUPL_FRAME_INFO,
+    DXGI_OUTDUPL_POINTER_SHAPE_INFO,
 };
 use windows::Win32::Graphics::Gdi::*;
 use windows::Win32::UI::WindowsAndMessaging::{
-    GetCursorInfo, CURSORINFO, CURSOR_SHOWING, DrawIconEx, DI_NORMAL, GetIconInfo, ICONINFO,
+    DrawIconEx, GetCursorInfo, GetIconInfo, CURSORINFO, CURSOR_SHOWING, DI_NORMAL, ICONINFO,
 };
-use crate::pointer::PointerShape;
 
 #[derive(Clone, Debug)]
 pub struct DisplayInfo {
@@ -51,7 +50,9 @@ pub fn enumerate_displays() -> Result<Vec<DisplayInfo>> {
     loop {
         let adapter: IDXGIAdapter1 = match unsafe { factory.EnumAdapters1(adapter_index) } {
             Ok(adapter) => adapter,
-            Err(error) if error.code() == windows::Win32::Graphics::Dxgi::DXGI_ERROR_NOT_FOUND => break,
+            Err(error) if error.code() == windows::Win32::Graphics::Dxgi::DXGI_ERROR_NOT_FOUND => {
+                break
+            }
             Err(error) => return Err(error).context("DXGI enumeration failed"),
         };
         let adapter_desc = unsafe { adapter.GetDesc1()? };
@@ -60,14 +61,26 @@ pub fn enumerate_displays() -> Result<Vec<DisplayInfo>> {
         loop {
             let output: IDXGIOutput = match unsafe { adapter.EnumOutputs(output_index) } {
                 Ok(output) => output,
-                Err(error) if error.code() == windows::Win32::Graphics::Dxgi::DXGI_ERROR_NOT_FOUND => break,
-            Err(error) => return Err(error).context("DXGI enumeration failed"),
+                Err(error)
+                    if error.code() == windows::Win32::Graphics::Dxgi::DXGI_ERROR_NOT_FOUND =>
+                {
+                    break
+                }
+                Err(error) => return Err(error).context("DXGI enumeration failed"),
             };
             let desc = unsafe { output.GetDesc()? };
-            let mut monitor_info = MONITORINFO { cbSize: std::mem::size_of::<MONITORINFO>() as u32, ..Default::default() };
-            let is_primary = unsafe { GetMonitorInfoW(desc.Monitor, &mut monitor_info).as_bool() && monitor_info.dwFlags & 1 != 0 };
-            let width = (desc.DesktopCoordinates.right - desc.DesktopCoordinates.left).unsigned_abs();
-            let height = (desc.DesktopCoordinates.bottom - desc.DesktopCoordinates.top).unsigned_abs();
+            let mut monitor_info = MONITORINFO {
+                cbSize: std::mem::size_of::<MONITORINFO>() as u32,
+                ..Default::default()
+            };
+            let is_primary = unsafe {
+                GetMonitorInfoW(desc.Monitor, &mut monitor_info).as_bool()
+                    && monitor_info.dwFlags & 1 != 0
+            };
+            let width =
+                (desc.DesktopCoordinates.right - desc.DesktopCoordinates.left).unsigned_abs();
+            let height =
+                (desc.DesktopCoordinates.bottom - desc.DesktopCoordinates.top).unsigned_abs();
             tracing::info!(adapter_index, output_index, name = %wide_string(&desc.DeviceName), width, height, is_primary, attached = desc.AttachedToDesktop.as_bool(), hmonitor = desc.Monitor.0 as isize, left = desc.DesktopCoordinates.left, top = desc.DesktopCoordinates.top, right = desc.DesktopCoordinates.right, bottom = desc.DesktopCoordinates.bottom, "DXGI output detected");
             displays.push(DisplayInfo {
                 adapter_index,
@@ -79,7 +92,10 @@ pub fn enumerate_displays() -> Result<Vec<DisplayInfo>> {
                 is_primary,
                 attached: desc.AttachedToDesktop.as_bool(),
                 hmonitor: desc.Monitor.0 as isize,
-                adapter_luid: (adapter_desc.AdapterLuid.HighPart, adapter_desc.AdapterLuid.LowPart),
+                adapter_luid: (
+                    adapter_desc.AdapterLuid.HighPart,
+                    adapter_desc.AdapterLuid.LowPart,
+                ),
             });
             output_index += 1;
         }
@@ -88,13 +104,25 @@ pub fn enumerate_displays() -> Result<Vec<DisplayInfo>> {
     Ok(displays)
 }
 
-pub fn select_parsec_display<'a>(displays: &'a [DisplayInfo], target: &parsec_vdd_rust::display::ParsecDisplay) -> Option<&'a DisplayInfo> {
-    if !target.active || target.clone_of > 0 { return None; }
+pub fn select_parsec_display<'a>(
+    displays: &'a [DisplayInfo],
+    target: &parsec_vdd_rust::display::ParsecDisplay,
+) -> Option<&'a DisplayInfo> {
+    if !target.active || target.clone_of > 0 {
+        return None;
+    }
     let hmonitor = target.get_hmonitor_id()?;
-    let mut matches = displays.iter().filter(|d| d.attached && d.width > 0 && d.height > 0
-        && d.hmonitor == hmonitor && d.name.eq_ignore_ascii_case(&target.device_name));
+    let mut matches = displays.iter().filter(|d| {
+        d.attached
+            && d.width > 0
+            && d.height > 0
+            && d.hmonitor == hmonitor
+            && d.name.eq_ignore_ascii_case(&target.device_name)
+    });
     let selected = matches.next()?;
-    if matches.next().is_some() { return None; }
+    if matches.next().is_some() {
+        return None;
+    }
     Some(selected)
 }
 
@@ -114,7 +142,11 @@ impl GdiCapturer {
         let width = target.width;
         let height = target.height;
         if width == 0 || height == 0 {
-            return Err(anyhow!("Invalid display dimensions for GDI capture: {}x{}", width, height));
+            return Err(anyhow!(
+                "Invalid display dimensions for GDI capture: {}x{}",
+                width,
+                height
+            ));
         }
 
         let hdc_screen = unsafe { GetDC(None) };
@@ -124,7 +156,9 @@ impl GdiCapturer {
 
         let hdc_mem = unsafe { CreateCompatibleDC(Some(hdc_screen)) };
         if hdc_mem.is_invalid() {
-            unsafe { let _ = ReleaseDC(None, hdc_screen); }
+            unsafe {
+                let _ = ReleaseDC(None, hdc_screen);
+            }
             return Err(anyhow!("Failed to create compatible memory DC"));
         }
 
@@ -156,7 +190,8 @@ impl GdiCapturer {
         };
 
         tracing::info!(
-            width, height,
+            width,
+            height,
             left = target.bounds.left,
             top = target.bounds.top,
             "GDI Capturer initialized successfully"
@@ -212,7 +247,11 @@ impl GdiCapturer {
         };
         if unsafe { GetCursorInfo(&mut ci).is_ok() } && (ci.flags.0 & CURSOR_SHOWING.0 != 0) {
             let pt = ci.ptScreenPos;
-            if pt.x >= self.bounds.left && pt.x < self.bounds.right && pt.y >= self.bounds.top && pt.y < self.bounds.bottom {
+            if pt.x >= self.bounds.left
+                && pt.x < self.bounds.right
+                && pt.y >= self.bounds.top
+                && pt.y < self.bounds.bottom
+            {
                 let mut icon_info = ICONINFO::default();
                 if unsafe { GetIconInfo(ci.hCursor.into(), &mut icon_info).is_ok() } {
                     let draw_x = (pt.x - self.bounds.left) - icon_info.xHotspot as i32;
@@ -355,10 +394,18 @@ impl DesktopDuplicator {
         let output: IDXGIOutput = unsafe { adapter.EnumOutputs(self.target.output_index)? };
         let desc = unsafe { output.GetDesc()? };
         let adapter_desc = unsafe { adapter.GetDesc1()? };
-        if wide_string(&desc.DeviceName) != self.target.name || desc.Monitor.0 as isize != self.target.hmonitor
-            || !desc.AttachedToDesktop.as_bool() || desc.DesktopCoordinates != self.target.bounds
-            || (adapter_desc.AdapterLuid.HighPart, adapter_desc.AdapterLuid.LowPart) != self.target.adapter_luid {
-            return Err(anyhow!("DXGI topology changed during duplicator creation; re-enumerate"));
+        if wide_string(&desc.DeviceName) != self.target.name
+            || desc.Monitor.0 as isize != self.target.hmonitor
+            || !desc.AttachedToDesktop.as_bool()
+            || desc.DesktopCoordinates != self.target.bounds
+            || (
+                adapter_desc.AdapterLuid.HighPart,
+                adapter_desc.AdapterLuid.LowPart,
+            ) != self.target.adapter_luid
+        {
+            return Err(anyhow!(
+                "DXGI topology changed during duplicator creation; re-enumerate"
+            ));
         }
         let output1: IDXGIOutput1 = output.cast()?;
         tracing::info!(name = %self.target.name, adapter_index = self.target.adapter_index, output_index = self.target.output_index, luid = ?self.target.adapter_luid, hmonitor = self.target.hmonitor, primary = self.target.is_primary, "creating desktop duplication");
@@ -377,11 +424,16 @@ impl DesktopDuplicator {
                 Some(&mut device),
                 None,
                 Some(&mut context),
-            ).map_err(|error| dxgi_failure("D3D11CreateDevice", error))?
+            )
+            .map_err(|error| dxgi_failure("D3D11CreateDevice", error))?
         };
         let device = device.context("D3D11 device was not created")?;
         let context = context.context("D3D11 context was not created")?;
-        let duplication = unsafe { output1.DuplicateOutput(&device).map_err(|error| dxgi_failure("DuplicateOutput", error))? };
+        let duplication = unsafe {
+            output1
+                .DuplicateOutput(&device)
+                .map_err(|error| dxgi_failure("DuplicateOutput", error))?
+        };
         Ok(DxgiState {
             device,
             context,
@@ -424,7 +476,9 @@ impl DesktopDuplicator {
                     // If DXGI has never produced an initial frame within 1.0 second,
                     // DWM is blocking DXGI OutputDuplication (as observed on Windows 11 26H2 / Insider).
                     // Fall back to GDI capturer immediately so the display is never left black.
-                    if self.frame_id == 0 && self.last_frame.elapsed() >= Duration::from_millis(1000) {
+                    if self.frame_id == 0
+                        && self.last_frame.elapsed() >= Duration::from_millis(1000)
+                    {
                         tracing::warn!(
                             elapsed_ms = self.last_frame.elapsed().as_millis() as u64,
                             "DXGI OutputDuplication produced no initial frame within 1s (DWM blocking detected); switching to GDI capturer"
@@ -461,11 +515,18 @@ impl DesktopDuplicator {
         Ok(Some(frame))
     }
 
-    fn next_frame_dxgi(&mut self, dxgi: &mut DxgiState, timeout: Duration) -> Result<Option<CapturedFrame>> {
+    fn next_frame_dxgi(
+        &mut self,
+        dxgi: &mut DxgiState,
+        timeout: Duration,
+    ) -> Result<Option<CapturedFrame>> {
         let timeout_ms = timeout.as_millis().min(u32::MAX as u128) as u32;
         let mut info = DXGI_OUTDUPL_FRAME_INFO::default();
         let mut resource: Option<IDXGIResource> = None;
-        let acquired = unsafe { dxgi.duplication.AcquireNextFrame(timeout_ms, &mut info, &mut resource) };
+        let acquired = unsafe {
+            dxgi.duplication
+                .AcquireNextFrame(timeout_ms, &mut info, &mut resource)
+        };
         if let Err(error) = acquired {
             if error.code() == DXGI_ERROR_WAIT_TIMEOUT {
                 return Ok(None);
@@ -500,14 +561,16 @@ impl DesktopDuplicator {
         };
 
         // Release the acquired frame back to DWM immediately!
-        let released = unsafe { dxgi.duplication.ReleaseFrame() }.map_err(|error| dxgi_failure("ReleaseFrame", error));
+        let released = unsafe { dxgi.duplication.ReleaseFrame() }
+            .map_err(|error| dxgi_failure("ReleaseFrame", error));
         released?;
 
         // Read staging texture into CPU buffer (outside the duplication lock)
         let staging = dxgi.staging.as_ref().context("staging texture missing")?;
         let mut mapped = D3D11_MAPPED_SUBRESOURCE::default();
         unsafe {
-            dxgi.context.Map(staging, 0, D3D11_MAP_READ, 0, Some(&mut mapped))
+            dxgi.context
+                .Map(staging, 0, D3D11_MAP_READ, 0, Some(&mut mapped))
                 .map_err(|error| dxgi_failure("Map staging texture", error))?
         };
         let stride = mapped.RowPitch;
@@ -552,9 +615,14 @@ impl DesktopDuplicator {
             let mut required = 0;
             let mut shape_info = DXGI_OUTDUPL_POINTER_SHAPE_INFO::default();
             unsafe {
-                dxgi.duplication.GetFramePointerShape(bytes.len() as u32,
-                    bytes.as_mut_ptr().cast(), &mut required, &mut shape_info)
-            }.map_err(|error| dxgi_failure("GetFramePointerShape", error))?;
+                dxgi.duplication.GetFramePointerShape(
+                    bytes.len() as u32,
+                    bytes.as_mut_ptr().cast(),
+                    &mut required,
+                    &mut shape_info,
+                )
+            }
+            .map_err(|error| dxgi_failure("GetFramePointerShape", error))?;
             dxgi.pointer_shape = Some(PointerShape::new(shape_info, bytes)?);
         }
         Ok(())
@@ -573,14 +641,20 @@ impl DesktopDuplicator {
                 MipLevels: 1,
                 ArraySize: 1,
                 Format: DXGI_FORMAT_B8G8R8A8_UNORM,
-                SampleDesc: DXGI_SAMPLE_DESC { Count: 1, Quality: 0 },
+                SampleDesc: DXGI_SAMPLE_DESC {
+                    Count: 1,
+                    Quality: 0,
+                },
                 Usage: D3D11_USAGE_STAGING,
                 BindFlags: 0,
                 CPUAccessFlags: D3D11_CPU_ACCESS_READ.0 as u32,
                 MiscFlags: D3D11_RESOURCE_MISC_FLAG(0).0 as u32,
             };
             let mut staging = None;
-            unsafe { dxgi.device.CreateTexture2D(&staging_desc, None, Some(&mut staging))? };
+            unsafe {
+                dxgi.device
+                    .CreateTexture2D(&staging_desc, None, Some(&mut staging))?
+            };
             dxgi.staging = Some(staging.context("failed to create staging texture")?);
         }
         Ok(())
@@ -588,8 +662,9 @@ impl DesktopDuplicator {
 }
 
 fn wide_string(value: &[u16]) -> String {
-    let length = value.iter().position(|character| *character == 0).unwrap_or(value.len());
+    let length = value
+        .iter()
+        .position(|character| *character == 0)
+        .unwrap_or(value.len());
     String::from_utf16_lossy(&value[..length])
 }
-
-
